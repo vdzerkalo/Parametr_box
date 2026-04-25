@@ -1,0 +1,41 @@
+name: Build Windows Portable EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller box_generator.spec
+        
+    - name: Prepare Portable Folder
+      run: |
+        mkdir BoxGenerator_Windows
+        xcopy /E /I dist\BoxGenerator_Portable BoxGenerator_Windows\
+        # Ensure presets folder is there if not already copied by spec
+        if (!(Test-Path "BoxGenerator_Windows\presets")) { mkdir BoxGenerator_Windows\presets }
+        
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: BoxGenerator_Windows_Portable
+        path: BoxGenerator_Windows\
