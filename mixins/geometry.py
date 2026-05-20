@@ -20,6 +20,10 @@ class GeometryMixin:
             self._active_worker = None
         if not hasattr(self, '_background_workers'):
             self._background_workers = []
+        if not hasattr(self, '_pending_params'):
+            self._pending_params = None
+        if not hasattr(self, '_pending_is_assembly'):
+            self._pending_is_assembly = None
 
     # Функція генерації базової коробки (завжди починається з (0,0,0) як центр XY)
     def create_box_geometry(self, length, width, height, tw_b, tw_t, t_d, clear, fillet, modes, parent_info=None, compound_parts=None, my_rel_x=0.0, my_rel_y=0.0):
@@ -337,16 +341,9 @@ class GeometryMixin:
     def generate_box(self):
         self._ensure_worker_infra()
 
-        # Скасувати попередній воркер, якщо ще виконується
-        if self._active_worker is not None and self._active_worker.isRunning():
-            self._active_worker.cancel()
-            self._active_worker.quit()
-
         is_assembly = hasattr(self, 'mode_assem_btn') and self.mode_assem_btn.isChecked()
 
         # ── Крок 1: захопити всі Qt-параметри В UI-ПОТОЦІ ──────────────────
-        # generate_geometry() звертається до Qt-віджетів — тому ми
-        # попередньо знімаємо всі значення тут, і передаємо у воркер чистий dict.
         if is_assembly:
             import copy
             params = {
@@ -380,14 +377,25 @@ class GeometryMixin:
             }
             self.update_grid()  # Qt side-effect — безпечно тут
 
+        # Якщо воркер вже працює, просто відкладаємо це завдання
+        if self._active_worker is not None and self._active_worker.isRunning():
+            self._pending_params = params
+            self._pending_is_assembly = is_assembly
+            return
+
         # ── Перевірка кешу ────────────────────────────────────────────────
         self._current_cache_key = self._mesh_cache.make_key(params)
         cached = self._mesh_cache.get(self._current_cache_key)
         if cached is not None:
             self.statusBar().showMessage("⚡ Відновлено з кешу.")
             self._on_geometry_ready(*cached, is_assembly)
+            self._check_pending_tasks()
             return
 
+        # Запуск нового воркера
+        self._run_geometry_worker(params, is_assembly)
+
+    def _run_geometry_worker(self, params, is_assembly):
         # ── Крок 2: важкі CadQuery-обчислення у фоновому потоці ────────────
         def _generate():
             """Виконується у QThread — лише CadQuery, жодних Qt-об'єктів."""
@@ -413,6 +421,22 @@ class GeometryMixin:
 
         self._active_worker = worker
         worker.start()
+
+    def _check_pending_tasks(self):
+        if hasattr(self, '_pending_params') and self._pending_params is not None:
+            params = self._pending_params
+            is_assembly = self._pending_is_assembly
+            self._pending_params = None
+            self._pending_is_assembly = None
+            
+            self._current_cache_key = self._mesh_cache.make_key(params)
+            cached = self._mesh_cache.get(self._current_cache_key)
+            if cached is not None:
+                self.statusBar().showMessage("⚡ Відновлено з кешу (черга).")
+                self._on_geometry_ready(*cached, is_assembly)
+                self._check_pending_tasks()
+            else:
+                self._run_geometry_worker(params, is_assembly)
 
     # -----------------------------------------------------------------------
     # Чисті CadQuery-функції (без Qt) — безпечні для фонового потоку
@@ -681,6 +705,7 @@ class GeometryMixin:
             self._background_workers.remove(worker)
         if getattr(self, '_active_worker', None) is worker:
             self._active_worker = None
+        self._check_pending_tasks()
 
     def update_view(self):
         """Публічний метод-заглушка для сумісності. Просто перезапускає generate_box."""

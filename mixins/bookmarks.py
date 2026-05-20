@@ -153,10 +153,14 @@ class BookmarksMixin:
         self.update_grid()
 
     def refresh_bookmarks(self):
-        self.bookmarks_tree.clear()
-        self._populate_tree(self.presets_dir, self.bookmarks_tree.invisibleRootItem())
-        if self.search_input.text():
-            self.filter_bookmarks(self.search_input.text())
+        self.bookmarks_tree.blockSignals(True)
+        try:
+            self.bookmarks_tree.clear()
+            self._populate_tree(self.presets_dir, self.bookmarks_tree.invisibleRootItem())
+            if self.search_input.text():
+                self.filter_bookmarks(self.search_input.text())
+        finally:
+            self.bookmarks_tree.blockSignals(False)
 
     def get_colored_folder_icon(self, color_hex):
         base_icon = self.style().standardIcon(QStyle.SP_DirIcon)
@@ -230,7 +234,7 @@ class BookmarksMixin:
                 try:
                     with open(path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
-                    if "placed_items" in data:
+                    if "placed_items" in data and len(data["placed_items"]) > 0:
                         self.placed_items = data.get("placed_items", [])
                         self.unplaced_items = data.get("unplaced_items", [])
                         self.placed_list.clear()
@@ -240,6 +244,11 @@ class BookmarksMixin:
                         self.mark_dirty()
                         self.update_adaptive_grid()
                         self.update_assembly_ui_state()
+                        if getattr(self, 'assem_submode', 'puzzle') == 'puzzle':
+                            if hasattr(self, 'update_puzzle_view'):
+                                self.update_puzzle_view()
+                        else:
+                            self.generate_box()
                     else:
                         item_name = os.path.basename(path).replace(".json", "")
                         new_item = {

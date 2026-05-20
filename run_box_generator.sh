@@ -21,5 +21,8 @@ if [ ! -d "./env" ]; then
     ./env/bin/pip install cadquery==2.4.0
 fi
 
+echo "Ensuring additional dependencies are installed..."
+./env/bin/pip install mapbox-earcut shapely
+
 echo "Environment ready! Starting application..."
 ./env/bin/python main.py

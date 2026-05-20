@@ -1372,7 +1372,7 @@ class AssemblyMixin:
                 try:
                     with open(full_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
-                    if "placed_items" in data:
+                    if "placed_items" in data and len(data["placed_items"]) > 0:
                         continue
                     item_name = name.replace(".json", "")
                     list_item = QListWidgetItem(item_name)

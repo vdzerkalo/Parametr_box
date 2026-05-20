@@ -119,7 +119,7 @@ class UISetupMixin:
         self.bookmarks_tree.setHeaderHidden(True)
         self.bookmarks_tree.setFixedHeight(200)
         self.bookmarks_tree.itemClicked.connect(self.on_bookmark_clicked)
-        self.bookmarks_tree.currentItemChanged.connect(lambda curr, prev: self.on_bookmark_clicked(curr, 0) if curr else None)
+        self.bookmarks_tree.currentItemChanged.connect(lambda curr, prev: self.on_bookmark_clicked(curr, 0) if (curr and self.bookmarks_tree.hasFocus()) else None)
         self.bookmarks_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.bookmarks_tree.customContextMenuRequested.connect(self.show_bookmarks_context_menu)
         self.bookmarks_tree.setStyleSheet("QTreeWidget { background-color: #2a2a2a; border: 1px solid #444; border-radius: 3px; }")
@@ -736,6 +736,8 @@ class UISetupMixin:
         else:
             if hasattr(self, 'uninstall_assembly_mouse_handlers'): self.uninstall_assembly_mouse_handlers()
             self.statusBar().clearMessage()
+            if hasattr(self, 'view_stack'):
+                self.view_stack.setCurrentIndex(0)
         if hasattr(self, 'generate_box'): self.generate_box()
 
     def toggle_panel_side(self):
