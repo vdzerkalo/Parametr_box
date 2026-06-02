@@ -5,7 +5,8 @@ import shutil
 import zipfile
 import subprocess
 import copy
-import cadquery as cq
+
+from mesh_engine import MeshData, write_ascii_stl
 
 from PySide6.QtWidgets import (QTreeWidgetItem, QMessageBox, QInputDialog, QMenu, 
                                QFileDialog, QStyle, QColorDialog, QProgressDialog, 
@@ -579,6 +580,24 @@ class BookmarksMixin:
         for i in range(root.childCount()):
             filter_item(root.child(i))
 
+    def _shape_to_meshdata(self, shape):
+        """Нормалізує вихід generate_geometry/generate_assembly_geometry в один
+        MeshData. Рушій не має cadquery — експорт лише через mesh (STL)."""
+        if shape is None:
+            return None
+        if isinstance(shape, MeshData):
+            return shape
+        if isinstance(shape, (list, tuple)):
+            meshes = []
+            for el in shape:
+                m = el[0] if isinstance(el, (list, tuple)) and el else el
+                if isinstance(m, MeshData):
+                    meshes.append(m)
+            if not meshes:
+                return None
+            return MeshData.combine(meshes)
+        return None
+
     def export_folder_bookmarks(self, folder_path, fmt):
         json_files = sorted([f for f in os.listdir(folder_path) if f.endswith(".json")])
         if not json_files:
@@ -640,27 +659,32 @@ class BookmarksMixin:
                         shape = self.generate_geometry()
                     
                     if shape:
-                        if is_assem_data and isinstance(shape, list):
-                            objs = [s[0].val() if hasattr(s[0], 'val') else s[0] for s in shape]
-                            final_shape = cq.Compound.makeCompound(objs) if objs else None
-                        else:
-                            final_shape = shape.val() if hasattr(shape, "val") else shape
+                        final_shape = self._shape_to_meshdata(shape)
                         
-                        if final_shape:
+                        if final_shape is not None and len(final_shape.faces) > 0:
                             if settings["combine"]:
                                 all_shapes_to_combine.append(final_shape)
+                                count += 1
+                            elif fmt == "stl":
+                                out_name = filename.replace(".json", ".stl")
+                                write_ascii_stl(os.path.join(output_dir, out_name),
+                                                final_shape.verts, final_shape.faces,
+                                                out_name.replace(".stl", ""))
+                                count += 1
                             else:
-                                out_name = filename.replace(".json", "." + fmt)
-                                cq.exporters.export(final_shape, os.path.join(output_dir, out_name), fmt.upper())
-                            count += 1
+                                errors.append(f"{filename}: формат '{fmt}' недоступний (новий рушій експортує лише STL)")
                 except Exception as e:
                     errors.append(f"{filename}: {str(e)}")
             
             if settings["combine"] and all_shapes_to_combine:
                 progress.setLabelText("Об'єднання та фінальний експорт...")
-                combined = cq.Compound.makeCompound(all_shapes_to_combine)
                 base_name = os.path.basename(folder_path) or "export"
-                cq.exporters.export(combined, os.path.join(output_dir, f"{base_name}.{fmt}"), fmt.upper())
+                if fmt == "stl":
+                    combined = MeshData.combine(all_shapes_to_combine)
+                    write_ascii_stl(os.path.join(output_dir, f"{base_name}.stl"),
+                                    combined.verts, combined.faces, base_name)
+                else:
+                    errors.append(f"Об'єднаний експорт у '{fmt}' недоступний (лише STL)")
 
             if settings["zip"]:
                 progress.setLabelText("Створення ZIP-архіву...")

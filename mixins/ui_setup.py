@@ -7,7 +7,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineE
                              QTreeWidget, QTreeWidgetItem, QInputDialog, QMenu,
                              QDoubleSpinBox, QSpinBox, QColorDialog,
                              QRadioButton, QButtonGroup, QListWidget, QListWidgetItem, QDialog, QDialogButtonBox, QProgressDialog,
-                             QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsItem, QStackedWidget)
+                             QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsItem, QStackedWidget,
+                             QSplitter)
 from PySide6.QtGui import QPalette, QColor, QIcon, QAction, QPainter, QPixmap, QShortcut, QKeySequence, QPen, QBrush, QFont, QFontMetricsF
 from PySide6.QtCore import Qt, QSettings, QFileInfo, QDir, QTimer, QSize, QRectF
 
@@ -286,20 +287,27 @@ class UISetupMixin:
         
         # Sub-mode selection
         submode_layout = QHBoxLayout()
-        self.puzzle_mode_btn = QPushButton(" Пазл (2D)")
-        self.view_mode_btn = QPushButton(" Камера (3D)")
+        self.puzzle_mode_btn = QPushButton(" 2D")
+        self.split_mode_btn = QPushButton(" 2D+3D")
+        self.view_mode_btn = QPushButton(" 3D")
         self.puzzle_mode_btn.setIcon(self.style().standardIcon(QStyle.SP_FileDialogContentsView))
+        self.split_mode_btn.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
         self.view_mode_btn.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
-        self.puzzle_mode_btn.setCheckable(True)
-        self.view_mode_btn.setCheckable(True)
+        self.puzzle_mode_btn.setToolTip("Лише 2D-пазл: редагування комірок, перетягування стінок")
+        self.split_mode_btn.setToolTip("Спліт: 2D-редактор ліворуч + 3D-перегляд праворуч.\nПравки видно у 3D у реальному часі")
+        self.view_mode_btn.setToolTip("Лише 3D: вільне обертання моделі")
+        for b in (self.puzzle_mode_btn, self.split_mode_btn, self.view_mode_btn):
+            b.setCheckable(True)
         self.puzzle_mode_btn.setChecked(True)
-        
+
         self.submode_group = QButtonGroup(self)
         self.submode_group.addButton(self.puzzle_mode_btn)
+        self.submode_group.addButton(self.split_mode_btn)
         self.submode_group.addButton(self.view_mode_btn)
         self.submode_group.buttonClicked.connect(self.on_assem_submode_changed)
-        
+
         submode_layout.addWidget(self.puzzle_mode_btn)
+        submode_layout.addWidget(self.split_mode_btn)
         submode_layout.addWidget(self.view_mode_btn)
         assembly_layout.addLayout(submode_layout)
 
@@ -367,7 +375,10 @@ class UISetupMixin:
         self.assembly_box.setContentLayout(assembly_layout)
         left_layout.addWidget(self.assembly_box)
         self.assembly_box.setVisible(False)
-        
+
+        if hasattr(self, '_setup_grid_panel'):
+            self._setup_grid_panel(left_layout)
+
         self.update_assembly_ui_state()
 
         # Export
@@ -544,9 +555,11 @@ class UISetupMixin:
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
 
-        # Stack: page 0 = 3D view, page 1 = 2D puzzle canvas
-        self.view_stack = QStackedWidget()
-        self.view_stack.addWidget(self.view_container)           # index 0
+        # Split-перегляд: 3D-в'юпорт ліворуч + 2D-пазл праворуч (можна обидва)
+        self.view_split = QSplitter(Qt.Horizontal)
+        self.view_split.setChildrenCollapsible(False)
+        self.view_split.setHandleWidth(4)
+        self.view_split.addWidget(self.view_container)
 
         self.puzzle_scene  = QGraphicsScene()
         self.puzzle_canvas = PuzzleGraphicsView(self.puzzle_scene)
@@ -602,8 +615,11 @@ class UISetupMixin:
         puzzle_layout.addLayout(self.puzzle_tb)
         puzzle_layout.addWidget(self.puzzle_canvas, stretch=1)
         
-        self.view_stack.addWidget(self.puzzle_container)  # index 1
-        right_layout.addWidget(self.view_stack, stretch=1)
+        self.view_split.addWidget(self.puzzle_container)
+        self.view_split.setSizes([1000, 1000])
+        right_layout.addWidget(self.view_split, stretch=1)
+        # за замовчуванням (режим Генерація) показуємо лише 3D
+        self.puzzle_container.setVisible(False)
 
         # Toolbox panel
         self.toolbox_frame = QFrame()
@@ -726,6 +742,10 @@ class UISetupMixin:
         self.sides_box.setVisible(not is_assembly)
         self.bed_box.setVisible(not is_assembly)
         self.assembly_box.setVisible(is_assembly)
+        if hasattr(self, 'grid_box'):
+            self.grid_box.setVisible(is_assembly)
+        if hasattr(self, 'cell_box') and not is_assembly:
+            self.cell_box.setVisible(False)        # показується лише на 2-клік по комірці
         self.toolbox_frame.setVisible(is_assembly)
         if is_assembly:
             if hasattr(self, 'populate_toolbox'): self.populate_toolbox()
@@ -736,9 +756,18 @@ class UISetupMixin:
         else:
             if hasattr(self, 'uninstall_assembly_mouse_handlers'): self.uninstall_assembly_mouse_handlers()
             self.statusBar().clearMessage()
-            if hasattr(self, 'view_stack'):
-                self.view_stack.setCurrentIndex(0)
+            self._set_view_mode('3d')
         if hasattr(self, 'generate_box'): self.generate_box()
+
+    def _set_view_mode(self, mode):
+        """mode: '2d' | '3d' | 'split' — керує видимістю 2D-пазла та 3D-в'юпорта."""
+        if not hasattr(self, 'view_split'):
+            return
+        self.view_container.setVisible(mode in ('3d', 'split'))
+        self.puzzle_container.setVisible(mode in ('2d', 'split'))
+        if mode == 'split':
+            total = max(self.view_split.width(), 800)
+            self.view_split.setSizes([total // 2, total // 2])
 
     def toggle_panel_side(self):
         self.settings_pos = "right" if self.settings_pos == "left" else "left"

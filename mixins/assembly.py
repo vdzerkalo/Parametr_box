@@ -236,6 +236,8 @@ class AssemblyMixin:
 
     def try_auto_snap(self, idx):
         item = self.placed_items[idx]
+        if item.get("type") == "grid":
+            return  # сітка — самостійний конструкт, не прилипає до коробок
         item_rot = item.get("rotation", 0)
         item_is_compound = item.get("type") == "compound"
         
@@ -404,9 +406,10 @@ class AssemblyMixin:
         self.ensure_unique_colors_for_assembly()
         self.update_adaptive_grid()
         self.update_assembly_ui_state()
-        if getattr(self, 'assem_submode', 'puzzle') == 'puzzle':
+        sm = getattr(self, 'assem_submode', 'puzzle')
+        if sm != 'view':          # 'puzzle' або 'split' → оновити 2D
             self.update_puzzle_view()
-        else:
+        if sm != 'puzzle':        # 'view' або 'split' → оновити 3D
             self.generate_box()
 
     def ensure_unique_colors_for_assembly(self):
@@ -706,26 +709,34 @@ class AssemblyMixin:
     def on_assem_submode_changed(self, btn):
         if btn == self.puzzle_mode_btn:
             self.assem_submode = 'puzzle'
-            self.view_stack.setCurrentIndex(1)
+            self._set_view_mode('2d')
             self.update_puzzle_view()
             self.statusBar().showMessage(
-                "🧩 Пазл: ЛКМ — переміщення, ПКМ — поворот на 90°, колесо — зум", 4000)
-        else:
-            self.assem_submode = 'view'
-            self.view_stack.setCurrentIndex(0)
+                "🧩 2D: подвійний клік — редагувати комірку · тягніть стінку — змінити розмір", 4000)
+        elif getattr(self, 'split_mode_btn', None) is not None and btn == self.split_mode_btn:
+            self.assem_submode = 'split'
+            self._set_view_mode('split')
+            self.update_puzzle_view()
             self.generate_box()
             self.statusBar().showMessage(
-                "🎥 Камера: вільне обертання 3D-виду", 3000)
+                "🔀 Спліт 2D+3D: правки у 2D одразу видно у 3D праворуч", 4000)
+        else:
+            self.assem_submode = 'view'
+            self._set_view_mode('3d')
+            self.generate_box()
+            self.statusBar().showMessage("🎥 3D: вільне обертання моделі", 3000)
 
     def update_puzzle_view(self):
-        from puzzle_item import PuzzleBoxItem, CompoundPuzzleItem
+        from puzzle_item import PuzzleBoxItem, CompoundPuzzleItem, PuzzleGridItem
         self.puzzle_scene.clear()
         selected_row = self.placed_list.currentRow()
-        
+
         for idx in range(len(self.placed_items)):
             item = self.placed_items[idx]
             if item.get("type") == "compound":
                 item_gfx = CompoundPuzzleItem(idx, self)
+            elif item.get("type") == "grid":
+                item_gfx = PuzzleGridItem(idx, self)
             else:
                 item_gfx = PuzzleBoxItem(idx, self)
             self.puzzle_scene.addItem(item_gfx)
@@ -764,6 +775,9 @@ class AssemblyMixin:
                 self.live_height_sb.blockSignals(True)
                 self.live_height_sb.setValue(val)
                 self.live_height_sb.blockSignals(False)
+                if item.get("type") == "grid" and hasattr(self, '_sync_panel_from_grid'):
+                    self._active_grid_idx_val = idx
+                    self._sync_panel_from_grid(idx)
         self.update_assembly_ui_state()
 
     def on_live_height_changed(self, val):
@@ -777,7 +791,9 @@ class AssemblyMixin:
         if item.get("type") == "compound":
             for part in item.get("parts", []):
                 part["data"]["height"] = val
-                
+        elif item.get("type") == "grid" and item.get("grid_config"):
+            item["grid_config"]["outer_H"] = val
+
         self.mark_dirty()
         # Trigger 3D view update via timer (debounce)
         if hasattr(self, 'regen_timer'):

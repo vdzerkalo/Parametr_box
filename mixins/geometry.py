@@ -620,6 +620,11 @@ class GeometryMixin:
                         compound_mesh.translate(item["x"], -item["y"], H_main / 2)
                         items_with_colors.append((compound_mesh, item.get("color_idx", 0)))
 
+            elif item.get("type") == "grid":
+                # ── Сітка-органайзер (PARTITIONED, grid_engine) ───────────────
+                if hasattr(self, '_append_grid_item_meshes'):
+                    self._append_grid_item_meshes(item, items_with_colors)
+
             else:
                 # ── Звичайна коробка ──────────────────────────────────────────
                 data = item["data"]

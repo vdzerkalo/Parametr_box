@@ -91,6 +91,61 @@ def extrude_polygon(pts_2d, height):
     return MeshData(verts, faces)
 
 
+def extrude_polygon_with_holes(exterior, holes, height, z0=0.0):
+    """Екструдує 2D-контур з отворами (внутрішніми кільцями) у 3D Mesh.
+
+    exterior: список точок зовнішнього кільця [[x,y], ...] (CCW).
+    holes: список кілець-отворів, кожне — список точок (CW).
+    height: висота екструзії; z0: нижня площина (за замовч. 0).
+    Дає замкнену оболонку: нижня грань (з отворами), верхня, бічні стінки
+    зовнішнього кільця та кожного отвору. Повертає MeshData.
+    """
+    ext = np.asarray(exterior, dtype=np.float32)
+    if len(ext) < 3:
+        return MeshData([], [])
+
+    all_pts = [ext]
+    rings = [len(ext)]
+    for h in (holes or []):
+        h = np.asarray(h, dtype=np.float32)
+        if len(h) < 3:
+            continue
+        all_pts.append(h)
+        rings.append(rings[-1] + len(h))
+
+    pts = np.concatenate(all_pts, axis=0)
+    rings_np = np.array(rings, dtype=np.uint32)
+
+    triangles = earcut.triangulate_float32(pts, rings_np)
+    if len(triangles) == 0:
+        return MeshData([], [])
+    triangles = triangles.reshape(-1, 3)
+
+    N = len(pts)
+    verts_bottom = np.column_stack((pts, np.full(N, z0, dtype=np.float32)))
+    verts_top = np.column_stack((pts, np.full(N, z0 + height, dtype=np.float32)))
+    verts = np.vstack((verts_bottom, verts_top))
+
+    faces_bottom = triangles[:, ::-1]   # нормаль вниз
+    faces_top = triangles + N           # нормаль вгору
+
+    # Бічні стінки — окремо для кожного кільця (замикання в межах кільця)
+    sides = []
+    start = 0
+    for end in rings:
+        cnt = end - start
+        for k in range(cnt):
+            i = start + k
+            nxt = start + ((k + 1) % cnt)
+            sides.append([i, nxt, nxt + N])
+            sides.append([i, nxt + N, i + N])
+        start = end
+
+    faces_side = np.array(sides, dtype=np.int32)
+    faces = np.vstack((faces_bottom, faces_top, faces_side))
+    return MeshData(verts, faces)
+
+
 def offset_polygon_2d(pts_2d, offset_distance):
     """
     Створює внутрішній полігон (offset_distance < 0) за допомогою Shapely.
@@ -120,3 +175,27 @@ def offset_polygon_2d(pts_2d, offset_distance):
     # Повертаємо координати зовнішнього кільця (без останньої точки, яка дублює першу)
     coords = list(offset_poly.exterior.coords)[:-1]
     return coords
+
+
+def write_ascii_stl(path, verts, faces, name="model"):
+    """Записує ASCII STL з масивів вершин/граней. Спільний хелпер для
+    одиночного та пакетного експорту (mesh-рушій не використовує cadquery)."""
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(f"solid {name}\n")
+        for face in faces:
+            v0, v1, v2 = verts[face[0]], verts[face[1]], verts[face[2]]
+            ux, uy, uz = v1[0]-v0[0], v1[1]-v0[1], v1[2]-v0[2]
+            vx, vy, vz = v2[0]-v0[0], v2[1]-v0[1], v2[2]-v0[2]
+            nx = uy*vz - uz*vy
+            ny = uz*vx - ux*vz
+            nz = ux*vy - uy*vx
+            l = math.sqrt(nx*nx + ny*ny + nz*nz) + 1e-9
+            nx, ny, nz = nx/l, ny/l, nz/l
+            f.write(f"  facet normal {nx} {ny} {nz}\n")
+            f.write("    outer loop\n")
+            f.write(f"      vertex {v0[0]} {v0[1]} {v0[2]}\n")
+            f.write(f"      vertex {v1[0]} {v1[1]} {v1[2]}\n")
+            f.write(f"      vertex {v2[0]} {v2[1]} {v2[2]}\n")
+            f.write("    endloop\n")
+            f.write("  endfacet\n")
+        f.write(f"endsolid {name}\n")
