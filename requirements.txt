@@ -1,8 +1,7 @@
 PySide6
 pyqtgraph
 PyOpenGL
-numpy<2.0.0
-cadquery==2.4.0
+numpy>=1.26
 pyinstaller
 mapbox-earcut
 shapely

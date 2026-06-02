@@ -8,8 +8,9 @@ from mixins.ui_setup import UISetupMixin
 from mixins.geometry import GeometryMixin
 from mixins.assembly import AssemblyMixin
 from mixins.bookmarks import BookmarksMixin
+from mixins.grid_constructor import GridConstructorMixin
 
-class BoxGeneratorApp(QMainWindow, UISetupMixin, GeometryMixin, AssemblyMixin, BookmarksMixin):
+class BoxGeneratorApp(QMainWindow, UISetupMixin, GeometryMixin, AssemblyMixin, BookmarksMixin, GridConstructorMixin):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Генератор Коробок Вазового Режиму (Автономний)")
@@ -57,10 +58,16 @@ class BoxGeneratorApp(QMainWindow, UISetupMixin, GeometryMixin, AssemblyMixin, B
 
     def _update_rainbow_anim(self):
         self._rainbow_phase = (self._rainbow_phase + 5) % 360
-        if hasattr(self, 'puzzle_scene'):
-            # Update only if something is selected to save resources
-            if self.puzzle_scene.selectedItems():
-                self.puzzle_scene.update()
+        # Перемальовуємо лише якщо 2D видно І вибрано елемент із райдужною рамкою
+        # (сітка має статичну рамку — не вантажимо залізо її перемалюванням 20 раз/с).
+        if not hasattr(self, 'puzzle_scene'):
+            return
+        if hasattr(self, 'puzzle_container') and not self.puzzle_container.isVisible():
+            return
+        sel = self.puzzle_scene.selectedItems()
+        if sel and any(type(it).__name__ in ('PuzzleBoxItem', 'CompoundPuzzleItem')
+                       for it in sel):
+            self.puzzle_scene.update()
 
     def keyPressEvent(self, event):
         # Делегуємо логіку видалення та інше

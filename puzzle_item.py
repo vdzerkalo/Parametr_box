@@ -2,7 +2,7 @@ import sys
 import numpy as np
 from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsItem, QMenu, QStyle, QApplication
 from PySide6.QtGui import QColor, QPainter, QBrush, QPen, QFont, QFontMetricsF, QAction, QCursor, QPainterPath, QPixmap, QIcon
-from PySide6.QtCore import Qt, QRectF, QTimer
+from PySide6.QtCore import Qt, QRectF, QTimer, QLineF, QPointF
 
 class PuzzleBoxItem(QGraphicsRectItem):
     """A draggable flat rectangle with full XY-projection rendering."""
@@ -893,3 +893,352 @@ class CompoundPuzzleItem(QGraphicsItem):
             painter.setBrush(QBrush(QColor(255, 255, 255, 40)))
             painter.setPen(Qt.NoPen)
             painter.drawPath(self._cached_union_path)
+
+
+class PuzzleGridItem(QGraphicsRectItem):
+    """2D-представлення сітки-органайзера: зовнішня рамка, комірки (cavities)
+    та пунктирні лінії швів між модулями. Подвійний клік по комірці відкриває
+    редактор ячейки. Перетягується як єдиний об'єкт."""
+    SCALE = 1.5  # мм → пікселі (як у PuzzleBoxItem)
+
+    def __init__(self, placed_idx, app):
+        import grid_engine as ge
+        item = app.placed_items[placed_idx]
+        cfg = item.get("grid_config", {})
+        try:
+            info = ge.layout_info(cfg)
+        except Exception:
+            info = {"outer_L": 100, "outer_W": 100, "cav_x": [], "cav_y": [],
+                    "col_groups": [], "row_groups": []}
+        self._info = info
+        self._cfg = cfg
+        s = self.SCALE
+        L = info["outer_L"] * s
+        W = info["outer_W"] * s
+        super().__init__(-L / 2 - 4, -W / 2 - 4, L + 8, W + 8)
+        self.placed_idx = placed_idx
+        self.app = app
+        colors = app.assembly_palette
+        cidx = item.get("color_idx", 0) % len(colors)
+        self._color = QColor(*[int(c * 255) for c in colors[cidx][:3]])
+        self.group_id = item.get("group_id", None)
+        self.setBrush(Qt.NoBrush)
+        self.setPen(Qt.NoPen)
+        # НЕ ItemIsMovable: сітка стоїть на місці, щоб клік/перетяг працювали на
+        # стінках і комірках, а не рухали весь блок.
+        self.setFlags(QGraphicsItem.ItemIsSelectable |
+                      QGraphicsItem.ItemSendsGeometryChanges)
+        self.setAcceptHoverEvents(True)
+        self.setPos(item.get("x", 0) * s, item.get("y", 0) * s)
+        self.setRotation(item.get("rotation", 0))
+        n_mod = info.get("n_modules", 1)
+        self.setToolTip(f"{item['name']} · {n_mod} шматок(ів)\n"
+                        f"подвійний клік по комірці — редагувати")
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionHasChanged:
+            it = self.app.placed_items[self.placed_idx]
+            it["x"] = value.x() / self.SCALE
+            it["y"] = value.y() / self.SCALE
+        return super().itemChange(change, value)
+
+    def paint(self, painter, option, widget=None):
+        s = self.SCALE
+        info = self._info
+        oL = info["outer_L"] * s
+        oW = info["outer_W"] * s
+        ox, oy = -oL / 2, -oW / 2
+        wall = self._cfg.get("wall", 2.0)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        has_sel = self.app.placed_list.currentRow() >= 0
+        painter.setOpacity(0.4 if (has_sel and not self.isSelected()) else 1.0)
+
+        # зовнішня оболонка (стінки)
+        wall_c = self._color.darker(130)
+        painter.setBrush(QBrush(wall_c))
+        painter.setPen(QPen(self._color.lighter(130), 1.5))
+        painter.drawRect(QRectF(ox, oy, oL, oW))
+
+        # комірки
+        cav_x = info.get("cav_x", [])
+        cav_y = info.get("cav_y", [])
+        painter.setBrush(QBrush(self._color.darker(185)))
+        painter.setPen(QPen(wall_c.darker(140), 0.8))
+        for (ax, bx) in cav_x:
+            for (ay, by) in cav_y:
+                painter.drawRect(QRectF(ox + ax * s, oy + ay * s,
+                                        (bx - ax) * s, (by - ay) * s))
+
+        # розміри кожної комірки Д×Ш×В (мм); навіть дрібні — повертаємо/скорочуємо,
+        # зафіксовані — золотим (з 🔒, якщо влазить)
+        cw = self._cfg.get("col_widths", [])
+        rh = self._cfg.get("row_heights", [])
+        cl = self._cfg.get("col_locked", [])
+        rl = self._cfg.get("row_locked", [])
+        inner_h = self._cfg.get("outer_H", 0) - (self._cfg.get("floor_t", 0) or 0)
+        font = QFont(painter.font())
+
+        def _fit(n_chars, along, across):
+            return min(13, int(across * 0.5), int(along / max(1, n_chars) / 0.56))
+
+        for ci, (ax, bx) in enumerate(cav_x):
+            w_px = (bx - ax) * s
+            for ri, (ay, by) in enumerate(cav_y):
+                h_px = (by - ay) * s
+                if w_px < 12 or h_px < 12:
+                    continue
+                lv = cw[ci] if ci < len(cw) else (bx - ax)
+                wv = rh[ri] if ri < len(rh) else (by - ay)
+                locked = (ci < len(cl) and cl[ci]) or (ri < len(rl) and rl[ri])
+                full = f"{lv:.0f}×{wv:.0f}×{inner_h:.0f}"
+                short = f"{lv:.0f}×{wv:.0f}"
+                opts = [(_fit(len(full), w_px, h_px), full, 0),
+                        (_fit(len(short), w_px, h_px), short, 0),
+                        (_fit(len(full), h_px, w_px), full, 90),
+                        (_fit(len(short), h_px, w_px), short, 90)]
+                fs, disp, rot = max(opts, key=lambda t: t[0])
+                if fs < 6:
+                    continue
+                if locked and rot == 0:
+                    disp2 = "🔒 " + disp
+                    fs2 = _fit(len(disp2), w_px, h_px)
+                    if fs2 >= 6:
+                        disp, fs = disp2, fs2
+                font.setPixelSize(max(6, fs))
+                painter.setFont(font)
+                painter.setPen(QPen(QColor(255, 200, 60, 245) if locked
+                                    else QColor(235, 235, 235, 235)))
+                cx = ox + (ax + bx) / 2 * s
+                cy = oy + (ay + by) / 2 * s
+                painter.save()
+                painter.translate(cx, cy)
+                if rot:
+                    painter.rotate(-90)
+                    rect = QRectF(-h_px / 2, -w_px / 2, h_px, w_px)
+                else:
+                    rect = QRectF(-w_px / 2, -h_px / 2, w_px, h_px)
+                painter.drawText(rect, Qt.AlignCenter, disp)
+                painter.restore()
+
+        # підсвічування Ctrl-вибраних комірок
+        sel = getattr(self.app, '_selected_cells', None)
+        if sel and getattr(self.app, '_sel_grid_idx', None) == self.placed_idx:
+            painter.setBrush(QColor(0, 200, 255, 70))
+            painter.setPen(QPen(QColor(0, 220, 255), 2))
+            for (sc, sr) in sel:
+                if sc < len(cav_x) and sr < len(cav_y):
+                    ax2, bx2 = cav_x[sc]; ay2, by2 = cav_y[sr]
+                    painter.drawRect(QRectF(ox + ax2 * s, oy + ay2 * s,
+                                            (bx2 - ax2) * s, (by2 - ay2) * s))
+
+        # лінії швів між модулями (de-факто лінії розрізу для друку)
+        painter.setPen(QPen(QColor(255, 170, 0), 2.0, Qt.DashLine))
+        for (c0, c1) in info.get("col_groups", [])[:-1]:
+            if c1 < len(cav_x):
+                xs = ox + (cav_x[c1][1] + wall / 2) * s
+                painter.drawLine(QLineF(xs, oy, xs, oy + oW))
+        for (r0, r1) in info.get("row_groups", [])[:-1]:
+            if r1 < len(cav_y):
+                ys = oy + (cav_y[r1][1] + wall / 2) * s
+                painter.drawLine(QLineF(ox, ys, ox + oL, ys))
+
+        # рамка виділення
+        if self.isSelected():
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(0, 200, 255), 2.0, Qt.DashLine))
+            painter.drawRect(QRectF(ox - 3, oy - 3, oL + 6, oW + 6))
+        elif QStyle.State_MouseOver in option.state:
+            painter.setBrush(QBrush(QColor(255, 255, 255, 30)))
+            painter.setPen(Qt.NoPen)
+            painter.drawRect(QRectF(ox, oy, oL, oW))
+
+    @staticmethod
+    def _find_index(intervals, v):
+        for i, (a, b) in enumerate(intervals):
+            if a - 2 <= v <= b + 2:
+                return i
+        return None
+
+    # ── перетягування внутрішньої стінки для зміни розміру комірок ──────────
+    def _recompute_info(self):
+        import grid_engine as ge
+        try:
+            self._info = ge.layout_info(self._cfg)
+        except Exception:
+            pass
+
+    def _local_to_mm(self, p):
+        return (p.x() / self.SCALE + self._info.get("outer_L", 0) / 2,
+                p.y() / self.SCALE + self._info.get("outer_W", 0) / 2)
+
+    def _wall_at(self, mmx, mmy):
+        """(axis, boundary_index, dist) якщо точка (мм) поряд із внутрішньою стінкою."""
+        info = self._info
+        wall = self._cfg.get("wall", 2.0)
+        cav_x = info.get("cav_x", [])
+        cav_y = info.get("cav_y", [])
+        oL, oW = info.get("outer_L", 0), info.get("outer_W", 0)
+        tol = max(wall, 6.0 / self.SCALE)
+        best = None
+        if 0 <= mmy <= oW:
+            for b in range(len(cav_x) - 1):
+                d = abs(mmx - (cav_x[b][1] + wall / 2))
+                if d <= tol and (best is None or d < best[2]):
+                    best = ('x', b, d)
+        if 0 <= mmx <= oL:
+            for b in range(len(cav_y) - 1):
+                d = abs(mmy - (cav_y[b][1] + wall / 2))
+                if d <= tol and (best is None or d < best[2]):
+                    best = ('y', b, d)
+        return best
+
+    def hoverMoveEvent(self, ev):
+        mmx, mmy = self._local_to_mm(ev.pos())
+        hit = self._wall_at(mmx, mmy)
+        if hit:
+            self.setCursor(Qt.SplitHCursor if hit[0] == 'x' else Qt.SplitVCursor)
+            self.setToolTip("Тягніть, щоб змінити розмір сусідніх комірок")
+        else:
+            self.setCursor(Qt.ArrowCursor)
+            self._update_cell_tooltip(mmx, mmy)
+        super().hoverMoveEvent(ev)
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.LeftButton:
+            mmx, mmy = self._local_to_mm(ev.pos())
+            hit = self._wall_at(mmx, mmy)
+            if hit:
+                axis, b, _ = hit
+                sizes = self._cfg['col_widths'] if axis == 'x' else self._cfg['row_heights']
+                self._resize = {'axis': axis, 'b': b,
+                                'start': mmx if axis == 'x' else mmy,
+                                'orig': list(sizes)}
+                self.setSelected(True)
+                ev.accept()
+                return
+            if ev.modifiers() & Qt.ControlModifier:
+                info = self._info
+                c = self._nearest_index(info.get("cav_x", []), mmx)
+                r = self._nearest_index(info.get("cav_y", []), mmy)
+                if hasattr(self.app, 'toggle_cell_selection'):
+                    self.app.toggle_cell_selection(self.placed_idx, c, r)
+                ev.accept()
+                return
+        self._resize = None
+        super().mousePressEvent(ev)
+
+    def mouseMoveEvent(self, ev):
+        r = getattr(self, '_resize', None)
+        if r:
+            mmx, mmy = self._local_to_mm(ev.pos())
+            mm = mmx if r['axis'] == 'x' else mmy
+            orig, b = r['orig'], r['b']
+            try:
+                import grid_engine as ge
+                mn = ge.MIN_CELL
+            except Exception:
+                mn = 6.0
+            delta = max(-(orig[b] - mn), min(mm - r['start'], orig[b + 1] - mn))
+            new = list(orig)
+            new[b] = orig[b] + delta
+            new[b + 1] = orig[b + 1] - delta
+            self._cfg['col_widths' if r['axis'] == 'x' else 'row_heights'] = new
+            self._recompute_info()
+            self.update()
+            if hasattr(self.app, '_grid_drag_status'):
+                self.app._grid_drag_status(self._cfg, r['axis'], b)
+            if hasattr(self.app, '_request_live_3d'):
+                self.app._request_live_3d()      # live-оновлення 3D у спліт-режимі
+            ev.accept()
+            return
+        super().mouseMoveEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        if getattr(self, '_resize', None):
+            self._resize = None
+            if hasattr(self.app, '_finalize_grid_resize'):
+                self.app._finalize_grid_resize(self.placed_idx)
+            ev.accept()
+            return
+        super().mouseReleaseEvent(ev)
+
+    @staticmethod
+    def _nearest_index(intervals, v):
+        if not intervals:
+            return 0
+        for i, (a, b) in enumerate(intervals):
+            if a <= v <= b:
+                return i
+        return min(range(len(intervals)),
+                   key=lambda i: abs((intervals[i][0] + intervals[i][1]) / 2 - v))
+
+    def _update_cell_tooltip(self, mmx, mmy):
+        info = self._info
+        c = self._find_index(info.get("cav_x", []), mmx)
+        r = self._find_index(info.get("cav_y", []), mmy)
+        cw = self._cfg.get("col_widths", []); rh = self._cfg.get("row_heights", [])
+        if c is None or r is None or c >= len(cw) or r >= len(rh):
+            return
+        cl = self._cfg.get("col_locked", []); rl = self._cfg.get("row_locked", [])
+        inner_h = self._cfg.get("outer_H", 0) - (self._cfg.get("floor_t", 0) or 0)
+        locks = []
+        if c < len(cl) and cl[c]:
+            locks.append("ширина🔒")
+        if r < len(rl) and rl[r]:
+            locks.append("глибина🔒")
+        lock_txt = (" · " + ", ".join(locks)) if locks else ""
+        self.setToolTip(f"Комірка [{c},{r}]:  {cw[c]:.0f}×{rh[r]:.0f}×{inner_h:.0f} мм{lock_txt}\n"
+                        f"2-клік — редагувати розмір")
+
+    def mouseDoubleClickEvent(self, ev):
+        info = self._info
+        mmx, mmy = self._local_to_mm(ev.pos())
+        c = self._nearest_index(info.get("cav_x", []), mmx)
+        r = self._nearest_index(info.get("cav_y", []), mmy)
+        sel = getattr(self.app, '_selected_cells', None)
+        if sel and (c, r) not in sel and hasattr(self.app, 'clear_cell_selection'):
+            self.app.clear_cell_selection()
+        if hasattr(self.app, 'open_grid_cell_editor'):
+            self.app.open_grid_cell_editor(self.placed_idx, col=c, row=r)
+        if hasattr(self.app, '_open_inline_cell_editor'):
+            self.app._open_inline_cell_editor(self.placed_idx, c, r, self)
+        super().mouseDoubleClickEvent(ev)
+
+    def contextMenuEvent(self, ev):
+        info = self._info
+        cav_x = info.get("cav_x", []); cav_y = info.get("cav_y", [])
+        mmx, mmy = self._local_to_mm(ev.pos())
+        c = self._nearest_index(cav_x, mmx)
+        r = self._nearest_index(cav_y, mmy)
+        rx = ry = 0.5
+        if c < len(cav_x):
+            a, b = cav_x[c]
+            if b > a:
+                rx = max(0.1, min(0.9, (mmx - a) / (b - a)))
+        if r < len(cav_y):
+            a, b = cav_y[r]
+            if b > a:
+                ry = max(0.1, min(0.9, (mmy - a) / (b - a)))
+        menu = QMenu()
+        a_sx = menu.addAction("➕ Розрізати тут вертикально (новий стовпець)")
+        a_sy = menu.addAction("➕ Розрізати тут горизонтально (новий ряд)")
+        menu.addSeparator()
+        a_dx = menu.addAction(f"🗑 Видалити стовпець {c}")
+        a_dy = menu.addAction(f"🗑 Видалити ряд {r}")
+        menu.addSeparator()
+        a_un = menu.addAction("🔓 Зняти фіксацію цієї комірки")
+        chosen = menu.exec(ev.screenPos())
+        app = self.app
+        if chosen == a_sx and hasattr(app, 'add_grid_split'):
+            app.add_grid_split(self.placed_idx, 'x', c, rx)
+        elif chosen == a_sy and hasattr(app, 'add_grid_split'):
+            app.add_grid_split(self.placed_idx, 'y', r, ry)
+        elif chosen == a_dx and hasattr(app, 'remove_grid_line'):
+            app.remove_grid_line(self.placed_idx, 'x', c)
+        elif chosen == a_dy and hasattr(app, 'remove_grid_line'):
+            app.remove_grid_line(self.placed_idx, 'y', r)
+        elif chosen == a_un and hasattr(app, 'set_grid_lock'):
+            app.set_grid_lock(self.placed_idx, 'x', c, False)
+            app.set_grid_lock(self.placed_idx, 'y', r, False)
+        ev.accept()

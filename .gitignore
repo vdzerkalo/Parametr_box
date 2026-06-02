@@ -23,14 +23,20 @@ wheels/
 
 # Virtual Environment
 venv/
+.venv/
 ENV/
 env/
 .env
 
+# Scratch / generated
+_*.png
+_*.log
+launch.log
+
 # Binary and generated files
 *.AppImage
 *.stl
-*.spec
+# box_generator.spec is intentionally tracked — CI (build_windows.yml) needs it
 bin/micromamba
 
 # IDEs
