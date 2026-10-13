@@ -3,7 +3,7 @@
 v2 ALL-PRINTED: clamp-mounted stretch-film dispenser. NO hardware (no bolts, nuts, rods). Bambu Lab A1, PETG.
 
 AI-READABLE SUMMARY
-  Run:     python generate.py [FILM_WIDTH_mm=530] [CORE_ID_mm=50]   (defaults = owner's roll)   -> stl/, 3mf/ (plate4 depends on width/ID)
+  Run:     python generate.py [FILM_WIDTH_mm=530] [CORE_ID_mm=46]   (defaults = owner's roll; 46 = worst case of a 50 mm tube, covers ID 46..54)   -> stl/, 3mf/ (plate4 depends on width/ID)
   Deps:    manifold3d shapely numpy trimesh
   Units:   mm. All STL are in PRINT ORIENTATION (z=0 = bed). Right-hand thread everywhere (twist +360*h/pitch).
   Thread:  one universal printed thread T20x6 (major 20, pitch 6, 45deg flanks, depth 1.9), internal void =
@@ -47,10 +47,12 @@ PARAMS = dict(
     # --- pad (swivel on mushroom head) ---
     pad_r=20.0, pad_h=16.0,
     # --- axle ---
-    rod_long=200.0, rod_short=120.0, coupler_od=30.0, coupler_len=44.0,   # shortest section must stay >=120 (coupler >=75 mm from axle end)
+    rod_lengths=(60, 80, 100, 120, 150, 180, 200),   # library of axle sections (mm). EDIT to your printer/shelf height (A1 max 256)
+    axle_margin=10.0,    # extra axle length on top of the computed need (film width tolerance); excess just sticks out past the knob
+    rod_end_min=120,     # the two END sections must be >= this (coupler stays >=75 mm from axle end, outside the cone)
+    coupler_od=30.0, coupler_len=44.0,
     # --- plates ---
     bed=250.0, gap=7.0,
-    max_print_h=225.0,   # user's shelf above the printer: real clearance ~230 mm; no part may be taller than this
 )
 P = PARAMS
 SEG = 96
@@ -301,21 +303,35 @@ def part_coupler():
 def axle_needed(width, core_id):
     _, ci = part_cone()
     z_ins = cone_insertion(core_id)
-    return width + 2 * (ci["z_top"] + ROD_PAST_KNOB - z_ins), z_ins, ci
+    return width + 2 * (ci["z_top"] + ROD_PAST_KNOB - z_ins) + P["axle_margin"], z_ins, ci
 
 
 def plan_axle(needed):
+    """Cheapest set of library sections whose total >= needed. cost = excess + 60 mm per extra piece (a coupler = more
+    parts/print time). Constraint: two END sections (>= rod_end_min); a single piece has no constraint.
+    Returns dict(pieces=[len,...] in assembly order, counts={len: n}, couplers, total, excess)."""
+    from itertools import combinations_with_replacement
+    lib, em = sorted(P["rod_lengths"]), P["rod_end_min"]
     best = None
-    for a in range(0, 8):
-        for b in range(0, 8):
-            L = P["rod_long"] * a + P["rod_short"] * b
-            if L < needed or a + b == 0:
+    for n in range(1, 8):
+        for c in combinations_with_replacement(lib, n):
+            L = sum(c)
+            if L < needed or (n > 1 and sum(1 for x in c if x >= em) < 2):
                 continue
-            cost = (L - needed) + 60 * (a + b - 1)
+            cost = (L - needed) + 60 * (n - 1)
             if best is None or cost < best[0]:
-                best = (cost, a, b, L)
-    _, a, b, L = best
-    return dict(n_long=a, n_short=b, total=L, couplers=a + b - 1, excess=L - needed)
+                best = (cost, c, L)
+    _, c, L = best
+    pc = sorted(c)
+    ends = [x for x in pc if x >= em][:2] if len(pc) > 1 else pc[:1]
+    mid = list(pc)
+    for e in ends:
+        mid.remove(e)
+    order = ([ends[0]] + sorted(mid, reverse=True) + ends[1:]) if len(pc) > 1 else pc
+    counts = {}
+    for x in order:
+        counts[x] = counts.get(x, 0) + 1
+    return dict(pieces=order, counts=counts, total=L, couplers=len(order) - 1, excess=L - needed)
 
 
 # ----------------------------------------------------------------------------
@@ -385,28 +401,31 @@ PRINT_SETTINGS = {
     "clamp_nut": _S(5, 40),
     "pad": _S(4, 25),
     "knob": _S(4, 30),
-    "rod_long": _S(5, 20, brim=8),                          # rod_long mm threaded rod (default 200: user's height limit ~230)
-    "rod_short": _S(5, 20, brim=8),
+    "rod": _S(5, 20, brim=8),                               # threaded axle section
     "coupler": _S(5, 40, brim=5),
 }
+
+def _settings(src):
+    return PRINT_SETTINGS["rod" if src.startswith("rod_") else src]
+
 
 def build_all():
     clamp, ring_c = part_clamp()
     cone, ci = part_cone()
     parts = dict(clamp_L=clamp, clamp_R=clamp.mirror((1, 0, 0)), clamp_nut=part_clamp_nut(), clamp_screw=part_clamp_screw(),
                  pad=part_pad(), holder=part_holder(), cone=cone, knob=part_knob(),
-                 rod_long=part_rod(P["rod_long"]), rod_short=part_rod(P["rod_short"]), coupler=part_coupler())
+                 coupler=part_coupler())
+    for L in P["rod_lengths"]:
+        parts[f"rod_{int(L)}"] = part_rod(float(L))
     return parts, dict(ring_c=ring_c, cone=ci)
 
 
 def main():
     width = float(sys.argv[1]) if len(sys.argv) > 1 else 530.0
-    core_id = float(sys.argv[2]) if len(sys.argv) > 2 else 50.0
+    core_id = float(sys.argv[2]) if len(sys.argv) > 2 else 46.0
     parts, info = build_all()
     tms = {k: to_trimesh(v) for k, v in parts.items()}
     for k, tm in tms.items():
-        if tm.extents[2] > P["max_print_h"]:
-            raise SystemExit(f"{k} is {tm.extents[2]:.0f} mm tall > max_print_h {P['max_print_h']:.0f}")
         tm.export(os.path.join(HERE, "stl", f"{k}.stl"))
         print(f"{k:12s} size {np.round(tm.extents, 1)}  vol {tm.volume/1000:6.1f} cm3  watertight={tm.is_watertight}")
     needed, _, _ = axle_needed(width, core_id)
@@ -418,10 +437,10 @@ def main():
         "plate3_screws_nuts_knobs": [("clamp_screw_1", "clamp_screw"), ("clamp_screw_2", "clamp_screw"),
                                      ("clamp_nut_1", "clamp_nut"), ("clamp_nut_2", "clamp_nut"),
                                      ("pad_1", "pad"), ("pad_2", "pad")] + [(f"knob_{i}", "knob") for i in range(1, 5)],
-        "plate4_axle": ([(f"rod_{int(P['rod_long'])}_{i}", "rod_long") for i in range(ax["n_long"])] +
-                        [(f"rod_{int(P['rod_short'])}_{i}", "rod_short") for i in range(ax["n_short"])] +
-                        [(f"coupler_{i}", "coupler") for i in range(ax["couplers"])]),
+        "plate4_axle": ([(f"axle{i + 1}_rod_{L}", f"rod_{L}") for i, L in enumerate(ax["pieces"])] +
+                        [(f"coupler_{i + 1}", "coupler") for i in range(ax["couplers"])]),
     }
+    library = [(f"rod_{int(L)}", f"rod_{int(L)}") for L in P["rod_lengths"]] + [(f"coupler_{i + 1}", "coupler") for i in range(3)]
     import bambu_project
     project_plates = []
     plate_titles = {"plate1_clamps": "1 Clamps", "plate2_holders_cones": "2 Holders + cones",
@@ -431,12 +450,20 @@ def main():
         write_3mf(os.path.join(HERE, "3mf", "plain", f"{plate}.3mf"), placed)          # fallback: geometry only
         src_of = dict(items)
         project_plates.append(dict(name=plate_titles[plate], items=[
-            dict(name=n, mesh=t, settings=PRINT_SETTINGS[src_of[n]]) for n, t in placed]))
+            dict(name=n, mesh=t, settings=_settings(src_of[n])) for n, t in placed]))
         b = np.array([t.bounds for _, t in placed])
         print(f"{plate}: {len(placed)} objs  X {b[:,0,0].min():.0f}..{b[:,1,0].max():.0f}  Y {b[:,0,1].min():.0f}..{b[:,1,1].max():.0f}  Hmax {b[:,1,2].max():.0f}")
     out = os.path.join(HERE, "3mf", "Stretch_Dispenser_A1_PETG.3mf")
     bambu_project.write_project(out, project_plates)
     print(f"Bambu project: {out} ({len(project_plates)} plates, {sum(len(p['items']) for p in project_plates)} objects)")
+    # separate rod-library project: one of every section length + spare couplers (delete what you do not need, copy what you do)
+    placed = shelf_pack([(n, tms[src]) for n, src in library], P["bed"], P["gap"])
+    write_3mf(os.path.join(HERE, "3mf", "plain", "rod_library.3mf"), placed)
+    lib_out = os.path.join(HERE, "3mf", "Axle_Rod_Library_A1_PETG.3mf")
+    src_of = dict(library)
+    bambu_project.write_project(lib_out, [dict(name="Axle rod library", items=[
+        dict(name=n, mesh=t, settings=_settings(src_of[n])) for n, t in placed])])
+    print(f"Rod library: {lib_out} (lengths {list(P['rod_lengths'])} + 3 couplers)")
     return parts, info
 
 
