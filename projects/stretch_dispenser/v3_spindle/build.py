@@ -2,7 +2,7 @@
 """
 v3 build: writes stl/ (NEW parts only), 3mf/Stretch_Dispenser_Spindle_A1_PETG.3mf (FULL set, 3 plates) and
 3mf/NEW_parts_only_A1_PETG.3mf (carrier x2, spindle x2, cone_v3 x2: for people who already printed v2 clamps/holders/screws/nuts/pads/knobs).
-`python build.py`   (no film width needed: there is no axle; spacing from `python plan.py W ID`)
+`python build.py [light|strong]`   (no film width needed: there is no axle; spacing from `python plan.py W ID`)
 """
 import os
 import numpy as np
@@ -15,8 +15,8 @@ import sys
 sys.path.insert(0, sys_path_v2)
 import bambu_project
 
-SET = dict(g.PRINT_SETTINGS)
-SET.update(carrier=g._S(5, 40), spindle=g._S(5, 30, brim=6), cone_v3=g._S(4, 25, brim=6))
+PROFILE = sys.argv[1] if len(sys.argv) > 1 else g.PROFILE          # light (default) | strong
+SET = g.print_settings(PROFILE)
 
 
 def main():

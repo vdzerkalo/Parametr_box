@@ -3,7 +3,7 @@
 v2 ALL-PRINTED: clamp-mounted stretch-film dispenser. NO hardware (no bolts, nuts, rods). Bambu Lab A1, PETG.
 
 AI-READABLE SUMMARY
-  Run:     python generate.py [FILM_WIDTH_mm=530] [CORE_ID_mm=46]   (defaults = owner's roll; 46 = worst case of a 50 mm tube, covers ID 46..54)   -> stl/, 3mf/ (plate4 depends on width/ID)
+  Run:     python generate.py [FILM_WIDTH_mm=530] [CORE_ID_mm=46] [PROFILE=light|strong]   (defaults = owner's roll; 46 = worst case of a 50 mm tube, covers ID 46..54)   -> stl/, 3mf/ (plate4 depends on width/ID)
   Deps:    manifold3d shapely numpy trimesh
   Units:   mm. All STL are in PRINT ORIENTATION (z=0 = bed). Right-hand thread everywhere (twist +360*h/pitch).
   Thread:  one universal printed thread T20x6 (major 20, pitch 6, 45deg flanks, depth 1.9), internal void =
@@ -393,17 +393,29 @@ def _S(walls, infill, brim=0, shells=5, pattern="gyroid"):
     return d
 
 
-PRINT_SETTINGS = {
-    "clamp_L": _S(5, 35), "clamp_R": _S(5, 35),            # load-bearing C-frame: 5 walls, 35 % gyroid
-    "holder": _S(5, 35, brim=6),                            # plate + 57 mm stud
-    "cone": _S(4, 25, brim=6),                              # prints tip-down, tall on a small footprint
-    "clamp_screw": _S(5, 40, brim=8),                       # 145 mm tall threaded screw
-    "clamp_nut": _S(5, 40),
-    "pad": _S(4, 25),
-    "knob": _S(4, 30),
-    "rod": _S(5, 20, brim=8),                               # threaded axle section
-    "coupler": _S(5, 40, brim=5),
+# (walls, infill %, brim mm) per part. Threaded parts keep >= 4 walls: a thread tooth is 1.9 mm deep, 3 walls (1.35 mm) leave a sparse-infill core.
+PROFILES = {
+    # "light" (default): ~38 % less plastic than "strong"; fine for hand-tightened household use
+    "light":  dict(shells=4, parts={
+        "clamp_L": (3, 12, 0), "clamp_R": (3, 12, 0), "holder": (4, 15, 6), "cone": (3, 10, 6), "clamp_screw": (4, 15, 8),
+        "clamp_nut": (4, 15, 0), "pad": (3, 10, 0), "knob": (4, 15, 0), "rod": (4, 12, 8), "coupler": (4, 20, 5),
+        "carrier": (4, 15, 0), "spindle": (4, 15, 6), "cone_v3": (3, 10, 6)}),
+    # "strong": heavy-duty (the original v2 settings)
+    "strong": dict(shells=5, parts={
+        "clamp_L": (5, 35, 0), "clamp_R": (5, 35, 0), "holder": (5, 35, 6), "cone": (4, 25, 6), "clamp_screw": (5, 40, 8),
+        "clamp_nut": (5, 40, 0), "pad": (4, 25, 0), "knob": (4, 30, 0), "rod": (5, 20, 8), "coupler": (5, 40, 5),
+        "carrier": (5, 40, 0), "spindle": (5, 30, 6), "cone_v3": (4, 25, 6)}),
 }
+
+
+def print_settings(profile="light"):
+    pr = PROFILES[profile]
+    return {k: _S(w, i, brim=b, shells=pr["shells"]) for k, (w, i, b) in pr["parts"].items()}
+
+
+PROFILE = "light"
+PRINT_SETTINGS = print_settings(PROFILE)
+
 
 def _settings(src):
     return PRINT_SETTINGS["rod" if src.startswith("rod_") else src]
@@ -423,6 +435,9 @@ def build_all():
 def main():
     width = float(sys.argv[1]) if len(sys.argv) > 1 else 530.0
     core_id = float(sys.argv[2]) if len(sys.argv) > 2 else 46.0
+    if len(sys.argv) > 3:
+        PRINT_SETTINGS.clear()
+        PRINT_SETTINGS.update(print_settings(sys.argv[3]))
     parts, info = build_all()
     tms = {k: to_trimesh(v) for k, v in parts.items()}
     for k, tm in tms.items():
