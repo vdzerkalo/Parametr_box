@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+assembly_preview.stl
+# root .gitignore ignores *.stl; keep the printable parts
+!**/stl/*.stl
