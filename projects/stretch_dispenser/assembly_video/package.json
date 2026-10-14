@@ -1,0 +1,22 @@
+{
+  "name": "stretch-dispenser-assembly-video",
+  "version": "1.0.0",
+  "description": "Animated Ukrainian assembly guide (HyperFrames + three.js) for the v3 stretch-film dispenser",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "npm run build && hyperframes check",
+    "preview": "npm run build && hyperframes preview",
+    "render": "npm run build && hyperframes render -o out/stretch_dispenser_assembly_v3.mp4",
+    "render:draft": "npm run build && hyperframes render -q draft -o out/draft.mp4",
+    "snapshot": "npm run build && hyperframes snapshot --at 3,10,17,25,33,41,49,56,62,70,78,82,89,100"
+  },
+  "dependencies": {
+    "esbuild": "^0.28.2",
+    "fflate": "^0.8.3",
+    "gsap": "^3.15.0",
+    "hyperframes": "^0.8.156",
+    "three": "^0.186.1"
+  },
+  "private": true,
+  "type": "module"
+}
