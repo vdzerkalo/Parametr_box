@@ -204,7 +204,7 @@ function update(t) {
   unit.children.forEach((c) => { if (c.isMesh && c !== filmMesh && c.geometry.type !== "RingGeometry") c.material.opacity = 0.5 * unitVisible; if (c.geometry && c.geometry.type === "RingGeometry") c.visible = false; });
   coreMesh.visible = unitVisible > 0.01; unit.children.forEach((c) => { if (c.isMesh && c.geometry.type === "CylinderGeometry" && c !== filmMesh) c.visible = unitVisible > 0.01; });
   right.visible = rightVis > 0.01;
-  tableMesh.material.opacity = 0.22 * ease((t - 13) / 1.0) * (1 - ease((t - 86) / 1.0) * 0);
+  tableMesh.material.opacity = 0.22 * ease((t - 75) / 2.5);   // the clamp is assembled off the table; the table appears only when mounting
   tableMesh.visible = tableMesh.material.opacity > 0.01;
   const dimK = ease((t - 86.5) / 0.8) * (1 - ease((t - 94.2) / 0.8));
   dim.visible = dimK > 0.01;
